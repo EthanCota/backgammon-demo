@@ -8,10 +8,33 @@ server, and a static browser client that talks to it.
 - `backgammon/transport/` — the sync server: `server.py` (process entry point),
   `session.py` (the game/session state machine), `protocol.py` (message types
   and error codes).
-- `backgammon/client/` — the static client (`index.html`, `game.js`,
-  `style.css`). Served separately; it connects back over `wss://`.
+- `index.html`, `game.js`, `style.css` (repo root) — the static client. Served
+  separately from the sync server; it connects back over `wss://`.
 
 Exactly one table, two seats. A third visitor is told the table is full.
+
+## Client hosting
+
+The client is served by GitHub Pages from this repository's **`main` branch,
+root folder**, at <https://backgammon.baxter.solutions> (see `CNAME`). The three
+client files live at the repo root specifically so Pages serves `index.html` at
+the site root rather than under a subpath; `.nojekyll` disables Jekyll so the
+files are published verbatim.
+
+The sync server's `Origin` allowlist contains only that one origin, so the
+client is expected to work **only** when loaded from the custom domain — not
+from `*.github.io`, and not from a `file://` copy.
+
+### Pointing the client at a sync server
+
+`game.js` resolves its WebSocket endpoint in this order:
+
+1. a `?ws=wss://…` query-string parameter,
+2. `window.BACKGAMMON_WS`, if a script sets it before `game.js` loads,
+3. the `SYNC_HOST_WS_URL` constant at the top of `game.js`.
+
+Only `wss://` is accepted — a browser hard-blocks plaintext `ws://` from an
+HTTPS page as mixed content.
 
 ## Requirements
 

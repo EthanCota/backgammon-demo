@@ -57,6 +57,26 @@ RATE_LIMIT_BURST = 10.0
 # §8.1: rotate at 50,000 lines (a full game is ~250 lines).
 ANALYTICS_MAX_LINES = 50_000
 
+# §6.3's post-Rev-6 ruling -- the PERIODIC host-liveness heartbeat's period.
+# Read as a BARE MODULE GLOBAL at use time (the same rule `GRACE_SECONDS` is
+# under in session.py), so `backgammon.transport.server.HEARTBEAT_INTERVAL_S`
+# is the one legal monkeypatch target and no default argument or class
+# attribute ever captures it.
+#
+# WHY 60 s, since the number is load-bearing rather than cosmetic:
+#   - The window it defends is the codespace's **30-minute** idle timeout, so
+#     60 s buys ~30 emissions per window. Losing one tick, or ten, still leaves
+#     the timer reset many times over; the mechanism does not become fragile
+#     until ~29 CONSECUTIVE ticks are lost, which is not a failure mode a
+#     one-line print has.
+#   - It is also comfortably inside the 5-minute floor of GitHub's configurable
+#     5-240 minute range, so it holds even if the timeout is ever LOWERED.
+#   - Cheaper is not better here, but noisier is actively worse: the runbook
+#     tells the operator to watch the terminal scroll as their live check, and
+#     a sub-second beat would bury the per-message lines that tell them the
+#     game itself is moving. One line a minute is legible.
+HEARTBEAT_INTERVAL_S: float = 60.0
+
 DEFAULT_EVENTS_PATH = Path("./data/events.jsonl")
 
 
@@ -175,8 +195,32 @@ class AnalyticsSink:
 # on an inbound request; the game is then permanently dead and no client-side
 # retry recovers it (§4.4 item 5, §6.3, §10.3 risk 2).
 #
-# The line below is the mechanism that prevents that: one line per inbound
-# message means PLAYING THE GAME is what keeps the table up.
+# There are TWO emitters below, and they cover DIFFERENT failures. Neither one
+# subsumes the other; deleting either leaves a real hole.
+#
+#   1. `_keepalive_line` -- one line per INBOUND MESSAGE. Covers the ACTIVELY
+#      PLAYED game: making a move is what keeps the table up.
+#
+#   2. `_heartbeat_loop`/`_heartbeat_line` -- one line every
+#      `HEARTBEAT_INTERVAL_S`, ON A TIMER, WHILE ANY SEAT IS LIVE, INDEPENDENT
+#      OF TRAFFIC. Covers the PAUSED game.
+#
+# 🔴 WHY (2) EXISTS, because (1) looks like it already covers this and DOES NOT.
+# (1) fires only on `hello`/`roll`/`move`. Two friends who stop playing for
+# thirty minutes -- talking, answering the door -- generate NO inbound messages,
+# so a seated-but-idle connection produces ZERO terminal output and the
+# codespace stops UNDERNEATH A GAME IN PROGRESS. §6.3 names that failure as
+# strictly worse than a cold start: it happens to people who are already
+# playing, and it presents as "the site randomly broke."
+#
+# 🔴 WHY (2) IS CONDITIONAL ON A LIVE SEAT, which reads like a needless
+# complication and is not. Compute quota is ~60 WALL-CLOCK HOURS PER MONTH
+# (120 core-hours at the 2-core multiplier, §6.3). A heartbeat that printed
+# unconditionally would hold the codespace open forever after an ABANDONED
+# table -- nobody playing, quota draining, until the month's budget is gone and
+# GitHub blocks further use. An empty table MUST be allowed to idle out.
+# **Both halves are load-bearing: "while seated" saves the paused game, "stops
+# when empty" saves the quota. Removing either breaks something non-obvious.**
 #
 # ⚠️ Ways to "clean this up" that silently break the demo half an hour later:
 #   - Deleting it, gating it behind a `--verbose`/DEBUG flag, or sampling it.
@@ -221,6 +265,29 @@ def _keepalive_line(seat: str | None, msg_type: str) -> None:
     """
     try:
         print(f"[bg] {_now_iso()} seat={seat or '-'} msg={msg_type}", flush=True)
+    except Exception:
+        pass
+
+
+def _heartbeat_line(live_seats: int) -> None:
+    """Emit ONE flushed stdout line for the PERIODIC heartbeat -- emitter (2) of
+    the block comment above. Load-bearing for host liveness in exactly the same
+    way `_keepalive_line` is, and for the failure `_keepalive_line` cannot see:
+    a seated connection with no traffic at all.
+
+    Distinct `[bg-hb]` prefix on purpose. The per-message line and the periodic
+    line answer different questions for whoever is watching the terminal --
+    "is the game moving?" versus "is the table still held open?" -- and the
+    tests that count one must not silently count the other.
+
+    `flush=True` is MANDATORY, not stylistic: Python block-buffers stdout when
+    it is not a TTY, and an unflushed heartbeat sits in the buffer past the
+    idle window doing nothing while the source looks perfect.
+
+    Cannot raise: a broken stdout must never kill a game in progress.
+    """
+    try:
+        print(f"[bg-hb] {_now_iso()} live_seats={live_seats}", flush=True)
     except Exception:
         pass
 
@@ -312,6 +379,11 @@ class BackgammonServer:
         self.metrics = Metrics()
         self._conns: dict[ServerConnection, _ConnState] = {}
         self._last_state_seq: int | None = None
+        # The periodic host-liveness heartbeat (§6.3). Held on the instance so
+        # the task is not garbage-collected mid-flight. Started lazily -- this
+        # constructor is called from the synchronous `create_server()` and may
+        # have no running loop.
+        self._heartbeat_task: "asyncio.Task[None] | None" = None
 
         self.session = GameSession(
             dice_factory=dice_factory,
@@ -320,6 +392,91 @@ class BackgammonServer:
             analytics=self._analytics,
         )
         self.sink.append("session_opened", {"session_id": self.session.state.session_id})
+
+    # --- the periodic host-liveness heartbeat (§6.3) ------------------------
+    #
+    # 🔴 READ THE BLOCK COMMENT ABOVE `_sniff_type` BEFORE CHANGING ANY OF THE
+    # THREE METHODS BELOW. They are not instrumentation; they are what stops a
+    # PAUSED game from being killed by the codespace's 30-minute idle timeout,
+    # and the "only while a seat is live" condition is deliberate quota
+    # protection, not an optimization.
+    #
+    # This whole mechanism READS `SeatRecord.status` and writes nothing. It
+    # touches neither the session state machine (§4.6.0's transitions and the
+    # await-window rules are untouched), nor the rate limiter, nor the origin
+    # check, nor the analytics sink.
+
+    def _live_seat_count(self) -> int:
+        """How many seats are `live` right now. Never raises.
+
+        `live` and not `grace`, deliberately. A seat in grace has NO connection
+        (`connection_lost` sets `conn=None`) and resolves within
+        `GRACE_SECONDS`=90 s to either `live` again or `open` -- so a table
+        where BOTH seats are in grace has nobody attached to keep alive, and
+        90 s is far inside the 30-minute window either way. One seat live and
+        one in grace still counts as live, which is correct: that is the case
+        where a player is mid-reconnect and the table must not die under them.
+
+        Returning 0 on an unexpected error is the safe default: it errs toward
+        stopping the heartbeat, i.e. toward protecting the quota, rather than
+        toward printing forever.
+        """
+        try:
+            st = self.session.state
+            return sum(1 for s in SEAT_ORDER if st.seats[s].status == "live")
+        except Exception:
+            return 0
+
+    def _sync_heartbeat(self) -> None:
+        """Bring the heartbeat task in line with seat occupancy. Never raises.
+
+        Called after every dispatched message and after every `connection_lost`
+        -- the only two places a seat can enter or leave `live` (`hello` binds
+        a seat; `connection_lost` moves it to `grace`). Idempotent, so calling
+        it more often than strictly necessary is free.
+        """
+        try:
+            task = self._heartbeat_task
+            if self._live_seat_count() > 0:
+                if task is None or task.done():
+                    self._heartbeat_task = asyncio.create_task(self._heartbeat_loop())
+            else:
+                if task is not None and not task.done():
+                    task.cancel()
+                self._heartbeat_task = None
+        except Exception:
+            # A heartbeat that cannot start must never take the message loop
+            # (or a game in progress) down with it.
+            pass
+
+    async def _heartbeat_loop(self) -> None:
+        """Emit one flushed line every `HEARTBEAT_INTERVAL_S` for as long as a
+        seat is live, then exit.
+
+        Sleeps FIRST. At the moment a seat goes live a `hello` has just been
+        dispatched, so `_keepalive_line` has already emitted; an immediate beat
+        would be pure duplication.
+
+        Self-terminating on `live == 0` is a second, independent stop -- belt
+        and braces behind `_sync_heartbeat`'s cancel, so a missed cancel costs
+        at most one interval of output rather than leaking a printer for the
+        life of the process (and the quota).
+        """
+        while True:
+            # BARE module-global read, once per tick, so the interval stays
+            # monkeypatchable. `CancelledError` from here propagates, which is
+            # exactly what `_sync_heartbeat`'s `task.cancel()` needs.
+            await asyncio.sleep(HEARTBEAT_INTERVAL_S)
+            try:
+                live = self._live_seat_count()
+                if live == 0:
+                    return
+                _heartbeat_line(live)
+            except Exception:
+                # One bad tick must not kill the loop; `_live_seat_count` and
+                # `_heartbeat_line` both swallow their own errors already, so
+                # reaching here at all would be a surprise.
+                pass
 
     # --- the callables GameSession drives everything through ---------------
 
@@ -426,12 +583,25 @@ class BackgammonServer:
         try:
             async for raw in conn:
                 await self._dispatch(conn, state, raw)
+                # A `hello` may have just bound a seat -- start the periodic
+                # heartbeat (§6.3). Deliberately here and not inside
+                # `_dispatch`, whose every early-return path would otherwise
+                # need it: no rejection branch can change seat occupancy, and
+                # `_dispatch`'s ordering is frozen by §4.5.3.
+                self._sync_heartbeat()
                 if state.malformed_strikes >= 3:
                     await self._close(conn, CloseCode.POLICY, "3 malformed frames")
                     break
         finally:
             self._conns.pop(conn, None)
-            await self.session.connection_lost(conn)
+            try:
+                await self.session.connection_lost(conn)
+            finally:
+                # The seat just left `live` (-> `grace`). If it was the last
+                # one, this STOPS the heartbeat so an abandoned table idles out
+                # and the codespace stops -- that is the quota protection, and
+                # it must run even if `connection_lost` raised.
+                self._sync_heartbeat()
 
     async def _dispatch(self, conn: ServerConnection, state: _ConnState, raw: Any) -> None:
         # ⚠️ HOST-LIVENESS HEARTBEAT -- see `_keepalive_line` and the block
@@ -588,6 +758,7 @@ __all__ = [
     "RATE_LIMIT_REFILL_PER_S",
     "RATE_LIMIT_BURST",
     "ANALYTICS_MAX_LINES",
+    "HEARTBEAT_INTERVAL_S",
     "default_host",
     "default_port",
     "build_origins",
