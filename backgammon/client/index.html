@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Backgammon</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body data-status="connecting">
+
+  <header class="topbar">
+    <h1>Backgammon</h1>
+    <div class="score">
+      <span class="score-label">White</span>
+      <span data-series="white" class="score-value">0</span>
+      <span class="score-sep">&ndash;</span>
+      <span data-series="black" class="score-value">0</span>
+      <span class="score-label">Black</span>
+    </div>
+    <div class="seat-badge" data-seat></div>
+  </header>
+
+  <div class="connection-banner" data-conn-banner>
+    <span data-conn-copy>Connecting&hellip;</span>
+    <button type="button" data-action="retry" class="retry-btn" hidden>Retry</button>
+  </div>
+
+  <main class="table-wrap">
+    <div class="board" data-board>
+      <!-- top half: points 13-24 left to right -->
+      <div class="quadrant top-left">
+        <div class="point point-top" data-point="13"></div>
+        <div class="point point-top" data-point="14"></div>
+        <div class="point point-top" data-point="15"></div>
+        <div class="point point-top" data-point="16"></div>
+        <div class="point point-top" data-point="17"></div>
+        <div class="point point-top" data-point="18"></div>
+      </div>
+      <div class="bar-col" data-bar>
+        <div class="bar-stack" data-bar-color="white"></div>
+        <div class="bar-stack" data-bar-color="black"></div>
+      </div>
+      <div class="quadrant top-right">
+        <div class="point point-top" data-point="19"></div>
+        <div class="point point-top" data-point="20"></div>
+        <div class="point point-top" data-point="21"></div>
+        <div class="point point-top" data-point="22"></div>
+        <div class="point point-top" data-point="23"></div>
+        <div class="point point-top" data-point="24"></div>
+      </div>
+      <div class="off-col" data-off>
+        <div class="off-stack" data-off-color="white"></div>
+        <div class="off-stack" data-off-color="black"></div>
+      </div>
+
+      <div class="quadrant bottom-left">
+        <div class="point point-bottom" data-point="12"></div>
+        <div class="point point-bottom" data-point="11"></div>
+        <div class="point point-bottom" data-point="10"></div>
+        <div class="point point-bottom" data-point="9"></div>
+        <div class="point point-bottom" data-point="8"></div>
+        <div class="point point-bottom" data-point="7"></div>
+      </div>
+      <div class="bar-col-spacer"></div>
+      <div class="quadrant bottom-right">
+        <div class="point point-bottom" data-point="6"></div>
+        <div class="point point-bottom" data-point="5"></div>
+        <div class="point point-bottom" data-point="4"></div>
+        <div class="point point-bottom" data-point="3"></div>
+        <div class="point point-bottom" data-point="2"></div>
+        <div class="point point-bottom" data-point="1"></div>
+      </div>
+      <div class="off-col-spacer"></div>
+    </div>
+
+    <aside class="side-panel">
+      <div class="dice-area" data-dice></div>
+
+      <div class="opening-area" data-opening hidden>
+        <p class="opening-copy" data-opening-copy></p>
+      </div>
+
+      <div class="turn-info">
+        <p data-turn-copy></p>
+      </div>
+
+      <div class="controls">
+        <button type="button" data-action="roll">Roll</button>
+        <button type="button" data-action="end-turn">End Turn</button>
+        <button type="button" data-action="undo">Undo</button>
+        <button type="button" data-action="rematch">Rematch</button>
+      </div>
+
+      <div class="event-log" data-last-event></div>
+    </aside>
+  </main>
+
+  <script src="game.js"></script>
+</body>
+</html>
