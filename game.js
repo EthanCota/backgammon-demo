@@ -1,4 +1,5 @@
 "use strict";
+console.log("[backgammon] build 20260817-053630-afdf254");
 
 // ============================================================================
 // SYNC HOST — single source of truth for the WebSocket endpoint.
