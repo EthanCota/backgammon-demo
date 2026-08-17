@@ -1,5 +1,5 @@
 "use strict";
-console.log("[backgammon] build 20260817-053630-afdf254");
+console.log("[backgammon] build 20260817-071052-0089d4a");
 
 // ============================================================================
 // SYNC HOST — single source of truth for the WebSocket endpoint.
@@ -343,6 +343,7 @@ function render(state) {
   renderSeries(state.series);
   renderOpening(state);
   renderTurnInfo(state);
+  renderTurnIndicator(state);
   renderControls(state);
   renderLastEvent(state.last_event);
 
@@ -404,15 +405,49 @@ function renderBoard(board) {
   });
 }
 
+// Item 2: real dice faces (pip dots), not numerals.
+// Standard 1-9 (row-major, 3x3) pip layouts for values 1-6.
+const DIE_PIP_LAYOUT = {
+  1: [5],
+  2: [1, 9],
+  3: [1, 5, 9],
+  4: [1, 3, 7, 9],
+  5: [1, 3, 5, 7, 9],
+  6: [1, 3, 4, 6, 7, 9],
+};
+
+function buildDieFace(value) {
+  const face = document.createElement("div");
+  face.className = "die-face";
+  const onCells = new Set(DIE_PIP_LAYOUT[value] || []);
+  for (let i = 1; i <= 9; i++) {
+    const pip = document.createElement("span");
+    pip.className = "pip" + (onCells.has(i) ? " pip-on" : "");
+    face.appendChild(pip);
+  }
+  return face;
+}
+
+// Item 3: dice colored to match the player who rolled. `active_seat` is the
+// seat whose turn it currently is -- during normal play that is also the
+// seat whose roll is on display (the dice belong to whoever is mid-turn).
+// The wire's dice payload carries no per-die seat tag (see wire.py), so
+// outside a live turn (opening roll / lobby / game over, where active_seat
+// is null) the dice render with the neutral/default face rather than
+// guessing an owner.
 function renderDice(state) {
   const el = document.querySelector("[data-dice]");
   if (!el) return;
   el.innerHTML = "";
   const remaining = state.dice.remaining.slice();
+  const rollerColor = state.active_seat === "white" || state.active_seat === "black"
+    ? state.active_seat
+    : null;
   (state.dice.rolled || []).forEach((d) => {
     const die = document.createElement("div");
     die.className = "die";
-    die.textContent = String(d);
+    if (rollerColor) die.setAttribute("data-color", rollerColor);
+    die.appendChild(buildDieFace(d));
     const idx = remaining.indexOf(d);
     const used = idx === -1;
     if (!used) remaining.splice(idx, 1);
@@ -483,23 +518,65 @@ function renderTurnInfo(state) {
   }
 }
 
+// Item 3: a clear top-of-board indicator of whose turn it is (black vs white).
+function renderTurnIndicator(state) {
+  const wrap = document.querySelector("[data-turn-indicator]");
+  const dot = document.querySelector("[data-turn-indicator-dot]");
+  const copy = document.querySelector("[data-turn-indicator-copy]");
+  if (!wrap || !dot || !copy) return;
+
+  let seat = null;
+  if (state.active_seat === "white" || state.active_seat === "black") {
+    seat = state.active_seat;
+  } else if (state.phase === "opening_roll" && state.opening) {
+    const awaiting = state.opening.awaiting || [];
+    if (awaiting.length === 1) seat = awaiting[0];
+  }
+
+  if (!seat) {
+    wrap.hidden = true;
+    return;
+  }
+  wrap.hidden = false;
+  dot.setAttribute("data-color", seat);
+  const label = seat === "white" ? "White" : "Black";
+  copy.textContent = seat === Conn.seat ? label + " to move (you)" : label + " to move";
+}
+
+// Item 4: adaptive buttons. While waiting on the opponent there is nothing
+// legal to click, so dead buttons are hidden (not merely disabled) and a
+// waiting hint takes their place -- rather than requiring the player to
+// figure out which of four buttons happens to be the live one.
 function renderControls(state) {
   const rollBtn = document.querySelector('[data-action="roll"]');
   const endBtn = document.querySelector('[data-action="end-turn"]');
   const undoBtn = document.querySelector('[data-action="undo"]');
   const rematchBtn = document.querySelector('[data-action="rematch"]');
+  const waitingHint = document.querySelector("[data-waiting-hint]");
 
-  if (rollBtn) {
-    if (state.phase === "opening_roll") {
-      const awaiting = state.opening ? state.opening.awaiting || [] : [];
-      rollBtn.disabled = !(Conn.seat && awaiting.includes(Conn.seat));
-    } else {
-      rollBtn.disabled = !(state.phase === "awaiting_roll" && state.active_seat === Conn.seat);
-    }
+  let canRoll = false;
+  if (state.phase === "opening_roll") {
+    const awaiting = state.opening ? state.opening.awaiting || [] : [];
+    canRoll = !!(Conn.seat && awaiting.includes(Conn.seat));
+  } else {
+    canRoll = state.phase === "awaiting_roll" && state.active_seat === Conn.seat;
   }
-  if (endBtn) endBtn.disabled = !state.can_end_turn;
-  if (undoBtn) undoBtn.disabled = !state.can_undo;
-  if (rematchBtn) rematchBtn.disabled = state.phase !== "game_over";
+  const canEndTurn = !!state.can_end_turn;
+  const canUndo = !!state.can_undo;
+  const canRematch = state.phase === "game_over";
+
+  if (rollBtn) { rollBtn.disabled = !canRoll; rollBtn.hidden = !canRoll; }
+  if (endBtn) { endBtn.disabled = !canEndTurn; endBtn.hidden = !canEndTurn; }
+  if (undoBtn) { undoBtn.disabled = !canUndo; undoBtn.hidden = !canUndo; }
+  if (rematchBtn) { rematchBtn.disabled = !canRematch; rematchBtn.hidden = !canRematch; }
+
+  // The waiting hint fills the gap only during active gameplay where it's
+  // genuinely someone else's move -- not in lobby/opening/game_over, which
+  // already have their own copy elsewhere (opening-area / turn-info).
+  const isMidGameWaiting = !canRoll && !canEndTurn && !canUndo &&
+    state.active_seat && state.active_seat !== Conn.seat &&
+    state.phase !== "opening_roll" && state.phase !== "game_over";
+  if (waitingHint) waitingHint.hidden = !isMidGameWaiting;
 }
 
 // §4.4 item 6 — `opening_timeout` is reported on the `awaiting_move` frame that

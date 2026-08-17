@@ -4,6 +4,11 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Backgammon</title>
+<!-- Item 5: favicon. A data-URI <link rel="icon"> means the browser never
+     issues an implicit GET /favicon.ico against whatever static host is
+     serving this file (this server is WS-only -- see transport/server.py --
+     so that implicit request 404s with nothing here to fall back to). -->
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%236b3f1d'/%3E%3Ccircle cx='11' cy='11' r='5.5' fill='%23f4ecd8' stroke='%23111' stroke-width='1.2'/%3E%3Ccircle cx='21' cy='21' r='5.5' fill='%232a2118' stroke='%23111' stroke-width='1.2'/%3E%3C/svg%3E">
 <link rel="stylesheet" href="style.css">
 </head>
 <body data-status="connecting">
@@ -16,6 +21,10 @@
       <span class="score-sep">&ndash;</span>
       <span data-series="black" class="score-value">0</span>
       <span class="score-label">Black</span>
+    </div>
+    <div class="turn-indicator" data-turn-indicator hidden>
+      <span class="turn-indicator-dot" data-turn-indicator-dot></span>
+      <span data-turn-indicator-copy></span>
     </div>
     <div class="seat-badge" data-seat></div>
   </header>
@@ -89,6 +98,7 @@
         <button type="button" data-action="end-turn">End Turn</button>
         <button type="button" data-action="undo">Undo</button>
         <button type="button" data-action="rematch">Rematch</button>
+        <span class="waiting-hint" data-waiting-hint hidden>Waiting for opponent&hellip;</span>
       </div>
 
       <div class="event-log" data-last-event></div>
