@@ -81,7 +81,7 @@ DEFAULT_EVENTS_PATH = Path("./data/events.jsonl")
 
 
 def default_host() -> str:
-    return "0.0.0.0"                              # NOT 127.0.0.1 -- §4.2
+    return os.environ.get("HOST", "0.0.0.0")     # loopback for local tunnel deployments
 
 
 def default_port() -> int:

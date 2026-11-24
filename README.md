@@ -50,12 +50,12 @@ pip install -r requirements.txt
 python3 -m backgammon.transport.server
 ```
 
-It binds `0.0.0.0` on `$PORT`, defaulting to **8765**, and prints a line to
+It binds `$HOST` (default `0.0.0.0`) on `$PORT`, defaulting to **8765**, and prints a line to
 stdout for every inbound message. That per-message logging is deliberate — on
 hosts that measure idleness by terminal output rather than by network traffic,
 it is what keeps the process's host awake while a game is in progress.
 
-**Run it in a foreground terminal.** Backgrounding it with stdout redirected to
+For hosts that suspend idle terminal sessions, **run it in a foreground terminal.** Backgrounding it with stdout redirected to
 a file can mean the output never reaches a terminal, which silently defeats the
 keepalive while the log file fills up and looks correct.
 
@@ -63,6 +63,7 @@ keepalive while the log file fills up and looks correct.
 
 | Variable | Default | Effect |
 |---|---|---|
+| `HOST` | `0.0.0.0` | Listen address; set `127.0.0.1` behind a local tunnel. |
 | `PORT` | `8765` | Listen port. |
 | `ANALYTICS_TOKEN` | unset | When set, enables `GET /events.jsonl` behind `Authorization: Bearer <token>`. Unset, that path returns `404` — an unset token is not distinguishable from no such endpoint. |
 | `BACKGAMMON_TEST_ORIGINS` | unset | Test-only. Relaxes the `Origin` allowlist to loopback. Never set this in production. |
@@ -83,3 +84,20 @@ Everything else on the port falls through to the WebSocket upgrade.
 
 The server appends analytics events to `./data/events.jsonl`, rotating at
 50,000 lines. That directory is gitignored; nothing is pushed anywhere.
+
+## Studio deployment (2026-11-24)
+
+The sync server runs under launchd as `com.baxter.backgammon-sync`, from
+`~/apps/backgammon`, with `HOST=127.0.0.1` and `PORT=8875`. Logs are in
+`~/apps/backgammon/logs`. launchd KeepAlive provides process supervision.
+
+The client currently uses a **temporary Cloudflare quick tunnel** supervised by
+`com.baxter.backgammon-quick-tunnel`. Its hostname can change if cloudflared
+restarts; it is a fallback, not the permanent deployment.
+
+A dedicated named tunnel (`com.baxter.backgammon-tunnel`, configuration
+`~/.cloudflared/backgammon.yml`) is prepared for `bg-sync.baxter.solutions`.
+After the owning Cloudflare account creates the DNS route, verify
+`https://bg-sync.baxter.solutions/healthz` and a two-client websocket game, then
+change `SYNC_HOST_WS_URL` to `wss://bg-sync.baxter.solutions/ws`, push `main`,
+and verify the served `game.js`. Tunnel credentials stay outside this repo.

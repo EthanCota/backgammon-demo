@@ -8,7 +8,7 @@ console.log("[backgammon] build 20260817-071052-0089d4a");
 // wss:// only — the page is served over HTTPS and a browser hard-blocks
 // ws:// from an HTTPS page as mixed content.
 // ============================================================================
-const SYNC_HOST_WS_URL = "wss://REPLACE_ME_SYNC_HOST.example.invalid/ws";
+const SYNC_HOST_WS_URL = "wss://hispanic-antiques-creates-theater.trycloudflare.com/ws";
 
 // §4.4 item 1: ?ws= query string wins, falling back to the build-time constant.
 function resolveWsUrl() {
